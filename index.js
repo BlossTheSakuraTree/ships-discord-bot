@@ -42,7 +42,6 @@ if (fs.existsSync(cooldownFile)) {
   cooldowns = JSON.parse(fs.readFileSync(cooldownFile));
 }
 
-// In-memory store for partial application data per thread
 const applicationData = {};
 
 const commands = [
@@ -108,7 +107,6 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ─── Build the application embed + buttons ──────────────────────────────────
 function buildApplicationMessage(data = {}) {
   const val = (key, placeholder) => data[key] ? `\`${data[key]}\`` : `*${placeholder}*`;
 
@@ -162,7 +160,6 @@ function buildApplicationMessage(data = {}) {
       ].join('\n')
     );
 
-  // Buttons — one per section
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('modal_identity').setLabel('📝 In-Game Name').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('modal_stats').setLabel('⭐ Gameplay & Stats').setStyle(ButtonStyle.Primary),
@@ -177,7 +174,6 @@ function buildApplicationMessage(data = {}) {
   return { embeds: [embed], components: [row1, row2] };
 }
 
-// ─── Modals ──────────────────────────────────────────────────────────────────
 function buildModal(customId, title, fields) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   const rows = fields.map(f =>
@@ -194,10 +190,8 @@ function buildModal(customId, title, fields) {
   return modal;
 }
 
-// ─── Interaction handler ─────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
-  // ── Slash commands ────────────────────────────────────────────────────────
   if (interaction.isCommand()) {
     const { commandName } = interaction;
 
@@ -231,7 +225,6 @@ client.on('interactionCreate', async (interaction) => {
         autoArchiveDuration: 1440,
       });
 
-      // Seed empty data for this thread
       applicationData[thread.id] = { applicantId: userId };
 
       await thread.send({
@@ -289,12 +282,10 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // ── Button clicks → open modal ────────────────────────────────────────────
   if (interaction.isButton()) {
     const threadId = interaction.channel.id;
     const data = applicationData[threadId];
 
-    // Only the applicant can fill their own form
     if (data && interaction.user.id !== data.applicantId) {
       return interaction.reply({ content: 'Only the applicant can fill out this form.', ephemeral: true });
     }
@@ -336,7 +327,6 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // ── Modal submissions ─────────────────────────────────────────────────────
   if (interaction.isModalSubmit()) {
     const threadId = interaction.channel.id;
     if (!applicationData[threadId]) applicationData[threadId] = {};
@@ -349,12 +339,9 @@ client.on('interactionCreate', async (interaction) => {
       try {
         const val = interaction.fields.getTextInputValue(id);
         if (val) data[id] = val;
-      } catch (_) {
-        // field not in this modal, skip
-      }
+      } catch (_) {}
     }
 
-    // Update the embed in the thread
     const messages = await interaction.channel.messages.fetch({ limit: 10 });
     const botMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
 
