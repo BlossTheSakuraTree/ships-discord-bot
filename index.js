@@ -14,16 +14,14 @@ const {
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const fs = require('fs');
-const {
-  token,
-  clientId,
-  guildId,
-  channelId,
-  allowedRoles,
-  inviteLink,
-  applicationCooldownDays,
-  cooldownFile,
-} = require('./config.json');
+const token = process.env.TOKEN;
+const clientId = process.env.CLIENT_ID;
+const guildId = process.env.GUILD_ID;
+const channelId = process.env.CHANNEL_ID;
+const inviteLink = process.env.INVITE_LINK;
+const applicationCooldownDays = parseInt(process.env.COOLDOWN_DAYS);
+const cooldownFile = process.env.COOLDOWN_FILE || 'cooldowns.json';
+const allowedRoles = (process.env.ALLOWED_ROLES || '').split(',').filter(Boolean);
 
 const client = new Client({
   intents: [
