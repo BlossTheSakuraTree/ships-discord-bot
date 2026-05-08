@@ -205,8 +205,11 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'apply') {
       console.log(`[APPLY] interaction.channel.id="${interaction.channel.id}" | channelId="${channelId}" | match=${interaction.channel.id === channelId}`);
       if (interaction.channel.id !== channelId) {
-        const ch = interaction.guild.channels.cache.get(channelId);
-        const chName = ch ? `#${ch.name}` : `channel ID ${channelId}`;
+        let chName = `<#${channelId}>`;
+        try {
+          const ch = await interaction.guild.channels.fetch(channelId);
+          if (ch) chName = `#${ch.name}`;
+        } catch (_) {}
         return interaction.reply({
           content: `You can only use \`/apply\` in ${chName}.`,
           ephemeral: true,
