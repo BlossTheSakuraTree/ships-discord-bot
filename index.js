@@ -203,17 +203,18 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName } = interaction;
 
     if (commandName === 'apply') {
-      console.log(`[APPLY] interaction.channel.id="${interaction.channel.id}" | channelId="${channelId}" | match=${interaction.channel.id === channelId}`);
-      if (interaction.channel.id !== channelId) {
-        let chName = `<#${channelId}>`;
-        try {
-          const ch = await interaction.guild.channels.fetch(channelId);
-          if (ch) chName = `#${ch.name}`;
-        } catch (_) {}
-        return interaction.reply({
-          content: `You can only use \`/apply\` in ${chName}.`,
-          ephemeral: true,
-        });
+      // Fetch the apply channel directly so we can create threads in it
+      // regardless of which channel the user typed /apply from
+      let applyChannel;
+      try {
+        applyChannel = await interaction.guild.channels.fetch(channelId);
+      } catch (err) {
+        console.error('[APPLY] Failed to fetch apply channel:', err);
+        return interaction.reply({ content: 'Could not find the application channel. Please contact an admin.', ephemeral: true });
+      }
+
+      if (!applyChannel) {
+        return interaction.reply({ content: 'Application channel not found. Please contact an admin.', ephemeral: true });
       }
 
       const userId = interaction.user.id;
@@ -232,7 +233,7 @@ client.on('interactionCreate', async (interaction) => {
       cooldowns[userId] = now;
       fs.writeFileSync(cooldownFile, JSON.stringify(cooldowns));
 
-      const thread = await interaction.channel.threads.create({
+      const thread = await applyChannel.threads.create({
         name: `Application — ${interaction.user.tag}`,
         type: ChannelType.PrivateThread,
         autoArchiveDuration: 1440,
