@@ -51,11 +51,16 @@ if (fs.existsSync(cooldownFile)) {
   cooldowns = JSON.parse(fs.readFileSync(cooldownFile));
 }
 
-// applicantId, all answer fields, submitted: bool
+// threadId -> { applicantId, submitted, ...answers }
 const applicationData = {};
 
+// Track in-progress applications to prevent double creation
+const inProgress = new Set();
+
 const commands = [
-  new SlashCommandBuilder().setName('apply').setDescription('Start the guild application process'),
+  new SlashCommandBuilder()
+    .setName('apply')
+    .setDescription('Start the guild application process'),
   new SlashCommandBuilder()
     .setName('accept')
     .setDescription('Accept the applicant in this thread'),
@@ -74,9 +79,9 @@ const commands = [
 
 async function registerCommands() {
   try {
-    console.log('Started refreshing application (/) commands.');
+    console.log('Refreshing slash commands...');
     await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
-    console.log('Successfully reloaded application (/) commands.');
+    console.log('Slash commands registered.');
   } catch (error) {
     console.error(error);
   }
@@ -88,16 +93,11 @@ client.once('ready', () => {
 });
 
 async function retryDM(user, message, thread, alreadyWarned = false) {
-  const warningMessage = `<@${user.id}>, it seems like your DMs are closed. Please open them so we can send you the invite link!`;
   try {
     const dmChannel = await user.createDM();
     await dmChannel.send(message);
-    console.log(`Successfully sent DM to ${user.tag}`);
-  } catch (err) {
-    if (!alreadyWarned) {
-      console.log(`User ${user.tag} has DMs disabled. Retrying...`);
-      await thread.send(warningMessage);
-    }
+  } catch {
+    if (!alreadyWarned) await thread.send(`<@${user.id}>, your DMs are closed. Please open them so we can send you the invite link!`);
     setTimeout(() => retryDM(user, message, thread, true), 10000);
   }
 }
@@ -108,108 +108,84 @@ client.on('messageCreate', async (message) => {
   const member = message.guild?.members.cache.get(message.author.id);
   const hasAllowedRole = member?.roles.cache.some(role => allowedRoles.includes(role.id));
   if (hasAllowedRole) return;
-  try {
-    await message.delete();
-  } catch (error) {
-    console.error('Failed to delete message:', error);
-  }
+  try { await message.delete(); } catch {}
 });
 
-function buildApplicationMessage(data = {}, submitted = false) {
-  const val = (key, placeholder) => data[key] ? `\`${data[key]}\`` : `*${placeholder}*`;
-
-  const embed = new EmbedBuilder()
-    .setTitle('Ships Guild Application')
-    .setColor(submitted ? 0x95a5a6 : 0x2ecc71)
-    .setDescription(
-      [
-        '---',
-        '',
-        '**In-Game Name:**',
-        val('inGameName', 'Enter your Minecraft in-game name here.'),
-        '',
-        '---',
-        '',
-        '### Requirements',
-        '- **Stars:** 200+',
-        '- **FKDR:** 5+',
-        '- **Experience with Fighting Cheaters & Snipers:**',
-        val('cheaterExp', 'We need players who know how to handle cheaters and snipers. Describe your experience.'),
-        '',
-        '---',
-        '',
-        '### Gameplay & Stats',
-        `**Stars:** ${val('stars', 'How many stars do you have? (Minimum 200)')}`,
-        `**FKDR:** ${val('fkdr', 'What is your FKDR? (Minimum 5)')}`,
-        `**Favorite Map(s):** ${val('favMaps', 'Which maps do you enjoy playing on the most?')}`,
-        `**Main Game Mode(s):** ${val('gameModes', 'Bed Wars, Sky Wars, etc.')}`,
-        `**How long have you been playing Bed Wars?** ${val('experience', 'Let us know your experience!')}`,
-        '',
-        '---',
-        '',
-        '### Personal Information',
-        '**Why do you want to join Ships?**',
-        val('whyJoin', "Tell us why you're interested in becoming a member."),
-        '**What makes you a good fit for Ships?**',
-        val('goodFit', "Give us an idea of your skills, personality, and how you'd contribute."),
-        '',
-        '---',
-        '',
-        '### Other Information',
-        '**Do you have any guild experience?**',
-        val('guildExp', 'If yes, tell us about your previous guilds.'),
-        "**Anything else you'd like us to know?**",
-        val('extra', 'Feel free to share any additional details.'),
-        '',
-        '---',
-        '',
-        submitted
-          ? '✅ **Application submitted! Staff will review it shortly.**'
-          : '**Best of luck with your application!**\nWe will review your stats and application, and get back to you soon.',
-      ].join('\n')
-    );
-
-  if (submitted) {
-    return { embeds: [embed], components: [] };
-  }
-
+function applicationButtons() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('modal_identity').setLabel('📝 In-Game Name').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('modal_stats').setLabel('⭐ Gameplay & Stats').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('modal_personal').setLabel('💬 Personal Info').setStyle(ButtonStyle.Primary),
   );
-
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('modal_other').setLabel('📋 Other Info').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('modal_cheater').setLabel('⚔️ Cheater Experience').setStyle(ButtonStyle.Primary),
   );
-
   const row3 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('submit_application').setLabel('✅ Submit Application').setStyle(ButtonStyle.Success),
   );
+  return [row1, row2, row3];
+}
 
-  return { embeds: [embed], components: [row1, row2, row3] };
+function buildApplicationEmbed(data = {}, submitted = false) {
+  const val = (key, placeholder) => data[key] ? `\`${data[key]}\`` : `*${placeholder}*`;
+  return new EmbedBuilder()
+    .setTitle('Ships Guild Application')
+    .setColor(submitted ? 0x95a5a6 : 0x2ecc71)
+    .setDescription([
+      '---', '',
+      '**In-Game Name:**',
+      val('inGameName', 'Enter your Minecraft in-game name here.'),
+      '', '---', '',
+      '### Requirements',
+      '- **Stars:** 200+',
+      '- **FKDR:** 5+',
+      '- **Experience with Fighting Cheaters & Snipers:**',
+      val('cheaterExp', 'Describe your experience dealing with cheaters and snipers.'),
+      '', '---', '',
+      '### Gameplay & Stats',
+      `**Stars:** ${val('stars', 'How many stars? (Minimum 200)')}`,
+      `**FKDR:** ${val('fkdr', 'What is your FKDR? (Minimum 5)')}`,
+      `**Favorite Map(s):** ${val('favMaps', 'Which maps do you enjoy most?')}`,
+      `**Main Game Mode(s):** ${val('gameModes', 'Bed Wars, Sky Wars, etc.')}`,
+      `**How long have you been playing Bed Wars?** ${val('experience', 'Let us know!')}`,
+      '', '---', '',
+      '### Personal Information',
+      '**Why do you want to join Ships?**',
+      val('whyJoin', "Tell us why you're interested."),
+      '**What makes you a good fit for Ships?**',
+      val('goodFit', "Your skills, personality, contributions..."),
+      '', '---', '',
+      '### Other Information',
+      '**Do you have any guild experience?**',
+      val('guildExp', 'Tell us about previous guilds.'),
+      "**Anything else you'd like us to know?**",
+      val('extra', 'Any additional details.'),
+      '', '---', '',
+      submitted
+        ? '✅ **Application submitted! Staff will review it shortly.**'
+        : '**Fill out each section above, then click Submit Application when done.**',
+    ].join('\n'));
 }
 
 function buildStaffEmbed(data, threadId, applicantId) {
-  const field = (key, fallback) => data[key] || fallback;
-
+  const f = (key) => data[key] || '*Not provided*';
   return new EmbedBuilder()
     .setTitle('📋 New Guild Application')
     .setColor(0x3498db)
     .addFields(
-      { name: '👤 In-Game Name', value: field('inGameName', '*Not provided*'), inline: true },
-      { name: '⭐ Stars', value: field('stars', '*Not provided*'), inline: true },
-      { name: '⚔️ FKDR', value: field('fkdr', '*Not provided*'), inline: true },
-      { name: '🗺️ Favorite Maps', value: field('favMaps', '*Not provided*'), inline: true },
-      { name: '🎮 Game Modes', value: field('gameModes', '*Not provided*'), inline: true },
-      { name: '⏱️ BW Experience', value: field('experience', '*Not provided*'), inline: true },
-      { name: '💬 Why Ships?', value: field('whyJoin', '*Not provided*') },
-      { name: '✅ Good Fit?', value: field('goodFit', '*Not provided*') },
-      { name: '🏰 Guild History', value: field('guildExp', '*Not provided*') },
-      { name: '⚙️ Cheater/Sniper Experience', value: field('cheaterExp', '*Not provided*') },
-      { name: '📝 Extra Info', value: field('extra', '*Not provided*') },
-      { name: '🔗 Application Thread', value: `<#${threadId}>` },
+      { name: '👤 In-Game Name', value: f('inGameName'), inline: true },
+      { name: '⭐ Stars', value: f('stars'), inline: true },
+      { name: '⚔️ FKDR', value: f('fkdr'), inline: true },
+      { name: '🗺️ Favorite Maps', value: f('favMaps'), inline: true },
+      { name: '🎮 Game Modes', value: f('gameModes'), inline: true },
+      { name: '⏱️ BW Experience', value: f('experience'), inline: true },
+      { name: '💬 Why Ships?', value: f('whyJoin') },
+      { name: '✅ Good Fit?', value: f('goodFit') },
+      { name: '🏰 Guild History', value: f('guildExp') },
+      { name: '⚙️ Cheater/Sniper Experience', value: f('cheaterExp') },
+      { name: '📝 Extra Info', value: f('extra') },
+      { name: '🔗 Thread', value: `<#${threadId}>` },
       { name: '🙋 Applicant', value: `<@${applicantId}>` },
     )
     .setTimestamp();
@@ -217,7 +193,7 @@ function buildStaffEmbed(data, threadId, applicantId) {
 
 function buildModal(customId, title, fields) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
-  const rows = fields.map(f =>
+  modal.addComponents(...fields.map(f =>
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId(f.id)
@@ -226,8 +202,7 @@ function buildModal(customId, title, fields) {
         .setPlaceholder(f.placeholder || '')
         .setRequired(f.required !== false)
     )
-  );
-  modal.addComponents(...rows);
+  ));
   return modal;
 }
 
@@ -237,19 +212,13 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName } = interaction;
 
     if (commandName === 'apply') {
-      let applyChannel;
-      try {
-        applyChannel = await interaction.guild.channels.fetch(channelId);
-      } catch (err) {
-        console.error('[APPLY] Failed to fetch apply channel:', err);
-        return interaction.reply({ content: 'Could not find the application channel. Please contact an admin.', ephemeral: true });
-      }
-
-      if (!applyChannel) {
-        return interaction.reply({ content: 'Application channel not found. Please contact an admin.', ephemeral: true });
-      }
-
       const userId = interaction.user.id;
+
+      // Prevent double-click spam creating two threads
+      if (inProgress.has(userId)) {
+        return interaction.reply({ content: 'Your application is already being created, please wait!', ephemeral: true });
+      }
+
       const now = Date.now();
       const cooldownMs = applicationCooldownDays * 24 * 60 * 60 * 1000;
       const cooldownTimestamp = cooldowns[userId];
@@ -262,23 +231,41 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      cooldowns[userId] = now;
-      fs.writeFileSync(cooldownFile, JSON.stringify(cooldowns));
+      inProgress.add(userId);
 
-      const thread = await applyChannel.threads.create({
-        name: `Application — ${interaction.user.tag}`,
-        type: ChannelType.PrivateThread,
-        autoArchiveDuration: 1440,
-      });
+      try {
+        await interaction.deferReply({ ephemeral: true });
 
-      applicationData[thread.id] = { applicantId: userId, submitted: false };
+        const applyChannel = await interaction.guild.channels.fetch(channelId);
+        if (!applyChannel) {
+          inProgress.delete(userId);
+          return interaction.editReply({ content: 'Application channel not found. Please contact an admin.' });
+        }
 
-      await thread.send({
-        content: `<@${userId}> Welcome! Fill out each section using the buttons, then click **Submit Application** when you're done.`,
-        ...buildApplicationMessage({}, false),
-      });
+        const thread = await applyChannel.threads.create({
+          name: `Application — ${interaction.user.tag}`,
+          type: ChannelType.PrivateThread,
+          autoArchiveDuration: 1440,
+        });
 
-      await interaction.reply({ content: `Your application thread has been created! Check <#${thread.id}>.`, ephemeral: true });
+        applicationData[thread.id] = { applicantId: userId, submitted: false };
+
+        cooldowns[userId] = now;
+        fs.writeFileSync(cooldownFile, JSON.stringify(cooldowns));
+
+        await thread.send({
+          content: `<@${userId}> Welcome! Fill out each section using the buttons below, then click **✅ Submit Application** when you're ready.`,
+          embeds: [buildApplicationEmbed({}, false)],
+          components: applicationButtons(),
+        });
+
+        await interaction.editReply({ content: `Your application thread has been created! Check <#${thread.id}>.` });
+      } catch (err) {
+        console.error('[APPLY ERROR]', err);
+        try { await interaction.editReply({ content: 'Something went wrong. Please try again.' }); } catch {}
+      } finally {
+        inProgress.delete(userId);
+      }
     }
 
     if (commandName === 'accept' || commandName === 'deny') {
@@ -297,26 +284,21 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: 'This application has not been submitted yet.', ephemeral: true });
       }
 
-      const applicantId = data.applicantId;
-      const user = await client.users.fetch(applicantId);
+      const user = await client.users.fetch(data.applicantId).catch(() => null);
 
       if (commandName === 'accept') {
-        const msg = `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`;
-        await retryDM(user, msg, thread);
-        await thread.send(`✅ <@${applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
-
+        if (user) await retryDM(user, `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`, thread);
+        await thread.send(`✅ <@${data.applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
         try {
           const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, applicantId)] });
-        } catch (_) {}
-
+          await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+        } catch {}
       } else {
-        await thread.send(`❌ <@${applicantId}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
-
+        await thread.send(`❌ <@${data.applicantId}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
         try {
           const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, applicantId)] });
-        } catch (_) {}
+          await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+        } catch {}
       }
 
       await interaction.reply({ content: 'Done!', ephemeral: true });
@@ -363,20 +345,18 @@ client.on('interactionCreate', async (interaction) => {
 
       data.submitted = true;
 
-      const messages = await interaction.channel.messages.fetch({ limit: 10 });
+      const messages = await interaction.channel.messages.fetch({ limit: 20 });
       const botMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
       if (botMsg) {
-        await botMsg.edit(buildApplicationMessage(data, true));
+        await botMsg.edit({ embeds: [buildApplicationEmbed(data, true)], components: [] });
       }
 
       try {
         const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-        if (staffChannel) {
-          await staffChannel.send({
-            content: `📥 **New application submitted!**`,
-            embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
-          });
-        }
+        await staffChannel.send({
+          content: `📥 **New application submitted!**`,
+          embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
+        });
       } catch (err) {
         console.error('[STAFF CHANNEL] Failed to post submission:', err);
       }
@@ -384,58 +364,53 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '✅ Your application has been submitted! Staff will review it soon.', ephemeral: true });
     }
 
-    if (data && data.submitted) {
-      return interaction.reply({ content: 'Your application has already been submitted and can no longer be edited.', ephemeral: true });
+    if (!data) return;
+
+    if (data.submitted) {
+      return interaction.reply({ content: 'This application has already been submitted and can no longer be edited.', ephemeral: true });
     }
 
-    if (data && interaction.user.id !== data.applicantId) {
+    if (interaction.user.id !== data.applicantId) {
       return interaction.reply({ content: 'Only the applicant can fill out this form.', ephemeral: true });
     }
 
-    if (interaction.customId === 'modal_identity') {
-      return interaction.showModal(buildModal('submit_identity', 'In-Game Name', [
+    const modals = {
+      modal_identity: () => buildModal('submit_identity', 'In-Game Name', [
         { id: 'inGameName', label: 'Minecraft In-Game Name', placeholder: 'e.g. Notch' },
-      ]));
-    }
-
-    if (interaction.customId === 'modal_stats') {
-      return interaction.showModal(buildModal('submit_stats', 'Gameplay & Stats', [
+      ]),
+      modal_stats: () => buildModal('submit_stats', 'Gameplay & Stats', [
         { id: 'stars', label: 'Stars (min. 200)', placeholder: 'e.g. 350' },
         { id: 'fkdr', label: 'FKDR (min. 5)', placeholder: 'e.g. 7.2' },
         { id: 'favMaps', label: 'Favorite Map(s)', placeholder: 'e.g. Aqua, Lotus' },
         { id: 'gameModes', label: 'Main Game Mode(s)', placeholder: 'e.g. Doubles, Squads' },
         { id: 'experience', label: 'How long playing Bed Wars?', placeholder: 'e.g. 2 years', long: true },
-      ]));
-    }
+      ]),
+      modal_personal: () => buildModal('submit_personal', 'Personal Information', [
+        { id: 'whyJoin', label: 'Why do you want to join Ships?', placeholder: 'Your motivation...', long: true },
+        { id: 'goodFit', label: 'What makes you a good fit?', placeholder: 'Skills, personality...', long: true },
+      ]),
+      modal_other: () => buildModal('submit_other', 'Other Information', [
+        { id: 'guildExp', label: 'Previous guild experience?', placeholder: 'Previous guilds...', long: true },
+        { id: 'extra', label: 'Anything else to share?', placeholder: 'Optional...', long: true, required: false },
+      ]),
+      modal_cheater: () => buildModal('submit_cheater', 'Cheater & Sniper Experience', [
+        { id: 'cheaterExp', label: 'Experience with cheaters & snipers', placeholder: 'How do you handle them?', long: true },
+      ]),
+    };
 
-    if (interaction.customId === 'modal_personal') {
-      return interaction.showModal(buildModal('submit_personal', 'Personal Information', [
-        { id: 'whyJoin', label: 'Why do you want to join Ships?', placeholder: 'Tell us your motivation...', long: true },
-        { id: 'goodFit', label: 'What makes you a good fit?', placeholder: 'Skills, personality, contributions...', long: true },
-      ]));
-    }
-
-    if (interaction.customId === 'modal_other') {
-      return interaction.showModal(buildModal('submit_other', 'Other Information', [
-        { id: 'guildExp', label: 'Previous guild experience?', placeholder: 'Name of guilds, what you learned...', long: true },
-        { id: 'extra', label: 'Anything else to share?', placeholder: 'Optional extra info...', long: true, required: false },
-      ]));
-    }
-
-    if (interaction.customId === 'modal_cheater') {
-      return interaction.showModal(buildModal('submit_cheater', 'Cheater & Sniper Experience', [
-        { id: 'cheaterExp', label: 'Experience handling cheaters & snipers', placeholder: 'How do you handle them?', long: true },
-      ]));
+    if (modals[interaction.customId]) {
+      return interaction.showModal(modals[interaction.customId]());
     }
   }
 
   if (interaction.isModalSubmit()) {
     const threadId = interaction.channel.id;
-    if (!applicationData[threadId]) applicationData[threadId] = {};
     const data = applicationData[threadId];
 
+    if (!data) return interaction.reply({ content: 'Could not find application data for this thread.', ephemeral: true });
+
     if (data.submitted) {
-      return interaction.reply({ content: 'Your application has already been submitted and can no longer be edited.', ephemeral: true });
+      return interaction.reply({ content: 'This application has already been submitted and can no longer be edited.', ephemeral: true });
     }
 
     const fieldIds = ['inGameName', 'stars', 'fkdr', 'favMaps', 'gameModes', 'experience',
@@ -445,16 +420,16 @@ client.on('interactionCreate', async (interaction) => {
       try {
         const val = interaction.fields.getTextInputValue(id);
         if (val) data[id] = val;
-      } catch (_) {}
+      } catch {}
     }
 
-    const messages = await interaction.channel.messages.fetch({ limit: 10 });
+    const messages = await interaction.channel.messages.fetch({ limit: 20 });
     const botMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
     if (botMsg) {
-      await botMsg.edit(buildApplicationMessage(data, false));
+      await botMsg.edit({ embeds: [buildApplicationEmbed(data, false)], components: applicationButtons() });
     }
 
-    await interaction.reply({ content: '✅ Section saved! Click **Submit Application** when you\'re fully done.', ephemeral: true });
+    await interaction.reply({ content: "✅ Section saved! Click **✅ Submit Application** when you're fully done.", ephemeral: true });
   }
 });
 
