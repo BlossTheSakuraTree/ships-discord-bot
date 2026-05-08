@@ -19,18 +19,20 @@ const token = (process.env.TOKEN || '').trim();
 const clientId = (process.env.CLIENT_ID || '').trim();
 const guildId = (process.env.GUILD_ID || '').trim();
 const channelId = (process.env.CHANNEL_ID || '').trim();
+const staffChannelId = (process.env.STAFF_CHANNEL_ID || '').trim();
 const inviteLink = (process.env.INVITE_LINK || '').trim();
 const applicationCooldownDays = parseInt(process.env.COOLDOWN_DAYS) || 7;
 const cooldownFile = (process.env.COOLDOWN_FILE || 'cooldowns.json').trim();
 const allowedRoles = (process.env.ALLOWED_ROLES || '').split(',').map(r => r.trim()).filter(Boolean);
+const adminRoles = (process.env.ADMIN_ROLES || '').split(',').map(r => r.trim()).filter(Boolean);
 
-const missingVars = ['TOKEN','CLIENT_ID','GUILD_ID','CHANNEL_ID','INVITE_LINK','ALLOWED_ROLES']
+const missingVars = ['TOKEN','CLIENT_ID','GUILD_ID','CHANNEL_ID','STAFF_CHANNEL_ID','INVITE_LINK','ALLOWED_ROLES','ADMIN_ROLES']
   .filter(k => !process.env[k] || !process.env[k].trim());
 if (missingVars.length > 0) {
   console.error(`[STARTUP ERROR] Missing env vars: ${missingVars.join(', ')}`);
   process.exit(1);
 }
-console.log(`[STARTUP] CHANNEL_ID loaded as: "${channelId}"`);
+console.log(`[STARTUP] CHANNEL_ID="${channelId}" STAFF_CHANNEL_ID="${staffChannelId}"`);
 
 const client = new Client({
   intents: [
@@ -67,7 +69,7 @@ const commands = [
     .addUserOption(option => option.setName('user').setDescription('User to clear cooldown').setRequired(true)),
   new SlashCommandBuilder()
     .setName('setallowedroles')
-    .setDescription('Set roles that can accept or deny applications')
+    .setDescription('Set roles that can accept or deny applications (admin only)')
     .addRoleOption(option => option.setName('role').setDescription('Role to add').setRequired(true)),
 ].map(command => command.toJSON());
 
@@ -181,6 +183,30 @@ function buildApplicationMessage(data = {}) {
   return { embeds: [embed], components: [row1, row2] };
 }
 
+function buildStaffEmbed(data, threadId, applicantId) {
+  const field = (key, fallback) => data[key] || fallback;
+
+  return new EmbedBuilder()
+    .setTitle('📋 New Guild Application')
+    .setColor(0x3498db)
+    .addFields(
+      { name: '👤 In-Game Name', value: field('inGameName', '*Not provided*'), inline: true },
+      { name: '⭐ Stars', value: field('stars', '*Not provided*'), inline: true },
+      { name: '⚔️ FKDR', value: field('fkdr', '*Not provided*'), inline: true },
+      { name: '🗺️ Favorite Maps', value: field('favMaps', '*Not provided*'), inline: true },
+      { name: '🎮 Game Modes', value: field('gameModes', '*Not provided*'), inline: true },
+      { name: '⏱️ BW Experience', value: field('experience', '*Not provided*'), inline: true },
+      { name: '💬 Why Ships?', value: field('whyJoin', '*Not provided*') },
+      { name: '✅ Good Fit?', value: field('goodFit', '*Not provided*') },
+      { name: '🏰 Guild History', value: field('guildExp', '*Not provided*') },
+      { name: '⚙️ Cheater/Sniper Experience', value: field('cheaterExp', '*Not provided*') },
+      { name: '📝 Extra Info', value: field('extra', '*Not provided*') },
+      { name: '🔗 Application Thread', value: `<#${threadId}>` },
+      { name: '🙋 Applicant', value: `<@${applicantId}>` },
+    )
+    .setTimestamp();
+}
+
 function buildModal(customId, title, fields) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   const rows = fields.map(f =>
@@ -203,8 +229,6 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName } = interaction;
 
     if (commandName === 'apply') {
-      // Fetch the apply channel directly so we can create threads in it
-      // regardless of which channel the user typed /apply from
       let applyChannel;
       try {
         applyChannel = await interaction.guild.channels.fetch(channelId);
@@ -254,19 +278,37 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: 'You do not have permission to use this command!', ephemeral: true });
       }
 
+      const thread = interaction.channel;
+      const isApplicationThread = thread.isThread() && applicationData[thread.id];
+
+      if (!isApplicationThread) {
+        return interaction.reply({ content: 'This command can only be used inside an application thread.', ephemeral: true });
+      }
+
       const user = interaction.options.getUser('user');
-      const userThread = interaction.guild.channels.cache
-        .get(channelId)
-        ?.threads.cache.find(t => t.name.includes(user.tag));
+      const data = applicationData[thread.id];
+
+      if (user.id !== data.applicantId) {
+        return interaction.reply({ content: 'That user is not the applicant for this thread.', ephemeral: true });
+      }
 
       if (commandName === 'accept') {
         const msg = `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`;
-        await retryDM(user, msg, userThread);
-        interaction.channel.send(`Congratulations to <@${user.id}>, they have been accepted into the guild! 🎉`);
-        if (userThread) userThread.send('You have been accepted! Join us using the invite link we sent you via DM.');
+        await retryDM(user, msg, thread);
+        await thread.send(`✅ <@${user.id}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
+
+        try {
+          const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
+          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, user.id)] });
+        } catch (_) {}
+
       } else {
-        interaction.channel.send(`Unfortunately, <@${user.id}> has been denied for the guild. 😔`);
-        if (userThread) userThread.send('Your application was denied. You may re-apply after the cooldown period.');
+        await thread.send(`❌ <@${user.id}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
+
+        try {
+          const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
+          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, user.id)] });
+        } catch (_) {}
       }
 
       await interaction.reply({ content: 'Done!', ephemeral: true });
@@ -286,7 +328,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (commandName === 'setallowedroles') {
-      if (!allowedRoles.some(role => interaction.member.roles.cache.has(role))) {
+      if (!adminRoles.some(role => interaction.member.roles.cache.has(role))) {
         return interaction.reply({ content: 'You do not have permission to use this command!', ephemeral: true });
       }
       const role = interaction.options.getRole('role');
@@ -364,6 +406,28 @@ client.on('interactionCreate', async (interaction) => {
 
     if (botMsg) {
       await botMsg.edit(buildApplicationMessage(data));
+    }
+
+    // Post summary to staff channel once application has at least an IGN
+    if (data.inGameName) {
+      try {
+        const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
+        if (staffChannel) {
+          const staffMessages = await staffChannel.messages.fetch({ limit: 50 });
+          const existing = staffMessages.find(m =>
+            m.author.id === client.user.id &&
+            m.embeds[0]?.fields?.some(f => f.name === '🔗 Application Thread' && f.value === `<#${threadId}>`)
+          );
+          const payload = { embeds: [buildStaffEmbed(data, threadId, data.applicantId)] };
+          if (existing) {
+            await existing.edit(payload);
+          } else {
+            await staffChannel.send(payload);
+          }
+        }
+      } catch (err) {
+        console.error('[STAFF CHANNEL] Failed to post/update summary:', err);
+      }
     }
 
     await interaction.reply({ content: '✅ Section saved! The application has been updated.', ephemeral: true });
