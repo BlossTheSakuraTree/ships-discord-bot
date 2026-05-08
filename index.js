@@ -14,14 +14,19 @@ const {
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const fs = require('fs');
-const token = process.env.TOKEN;
-const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID;
-const channelId = process.env.CHANNEL_ID;
-const inviteLink = process.env.INVITE_LINK;
-const applicationCooldownDays = parseInt(process.env.COOLDOWN_DAYS);
-const cooldownFile = process.env.COOLDOWN_FILE || 'cooldowns.json';
-const allowedRoles = (process.env.ALLOWED_ROLES || '').split(',').filter(Boolean);
+const {
+  token,
+  clientId,
+  guildId,
+  channelId: rawChannelId,
+  allowedRoles: rawAllowedRoles,
+  inviteLink,
+  applicationCooldownDays,
+  cooldownFile,
+} = require('./config.json');
+
+const channelId = String(rawChannelId);
+const allowedRoles = rawAllowedRoles.map(String);
 
 const client = new Client({
   intents: [
@@ -77,7 +82,7 @@ client.once('ready', () => {
   registerCommands();
 });
 
-async function retryDM(user, message, thread, retries = 5, alreadyWarned = false) {
+async function retryDM(user, message, thread, alreadyWarned = false) {
   const warningMessage = `<@${user.id}>, it seems like your DMs are closed. Please open them so we can send you the invite link!`;
   try {
     const dmChannel = await user.createDM();
@@ -88,7 +93,7 @@ async function retryDM(user, message, thread, retries = 5, alreadyWarned = false
       console.log(`User ${user.tag} has DMs disabled. Retrying...`);
       await thread.send(warningMessage);
     }
-    setTimeout(() => retryDM(user, message, thread, retries, true), 10000);
+    setTimeout(() => retryDM(user, message, thread, true), 10000);
   }
 }
 
@@ -138,17 +143,17 @@ function buildApplicationMessage(data = {}) {
         '---',
         '',
         '### Personal Information',
-        `**Why do you want to join Ships?**`,
-        val('whyJoin', 'Tell us why you\'re interested in becoming a member.'),
-        `**What makes you a good fit for Ships?**`,
-        val('goodFit', 'Give us an idea of your skills, personality, and how you\'d contribute.'),
+        '**Why do you want to join Ships?**',
+        val('whyJoin', "Tell us why you're interested in becoming a member."),
+        '**What makes you a good fit for Ships?**',
+        val('goodFit', "Give us an idea of your skills, personality, and how you'd contribute."),
         '',
         '---',
         '',
         '### Other Information',
-        `**Do you have any guild experience?**`,
+        '**Do you have any guild experience?**',
         val('guildExp', 'If yes, tell us about your previous guilds.'),
-        `**Anything else you\'d like us to know?**`,
+        "**Anything else you'd like us to know?**",
         val('extra', 'Feel free to share any additional details.'),
         '',
         '---',
@@ -270,6 +275,9 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (commandName === 'setallowedroles') {
+      if (!allowedRoles.some(role => interaction.member.roles.cache.has(role))) {
+        return interaction.reply({ content: 'You do not have permission to use this command!', ephemeral: true });
+      }
       const role = interaction.options.getRole('role');
       if (!allowedRoles.includes(role.id)) {
         allowedRoles.push(role.id);
