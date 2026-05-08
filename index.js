@@ -15,14 +15,22 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const fs = require('fs');
 
-const token = process.env.TOKEN;
-const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID;
-const channelId = String(process.env.CHANNEL_ID);
-const inviteLink = process.env.INVITE_LINK;
+const token = (process.env.TOKEN || '').trim();
+const clientId = (process.env.CLIENT_ID || '').trim();
+const guildId = (process.env.GUILD_ID || '').trim();
+const channelId = (process.env.CHANNEL_ID || '').trim();
+const inviteLink = (process.env.INVITE_LINK || '').trim();
 const applicationCooldownDays = parseInt(process.env.COOLDOWN_DAYS) || 7;
-const cooldownFile = process.env.COOLDOWN_FILE || 'cooldowns.json';
+const cooldownFile = (process.env.COOLDOWN_FILE || 'cooldowns.json').trim();
 const allowedRoles = (process.env.ALLOWED_ROLES || '').split(',').map(r => r.trim()).filter(Boolean);
+
+const missingVars = ['TOKEN','CLIENT_ID','GUILD_ID','CHANNEL_ID','INVITE_LINK','ALLOWED_ROLES']
+  .filter(k => !process.env[k] || !process.env[k].trim());
+if (missingVars.length > 0) {
+  console.error(`[STARTUP ERROR] Missing env vars: ${missingVars.join(', ')}`);
+  process.exit(1);
+}
+console.log(`[STARTUP] CHANNEL_ID loaded as: "${channelId}"`);
 
 const client = new Client({
   intents: [
@@ -195,9 +203,12 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName } = interaction;
 
     if (commandName === 'apply') {
+      console.log(`[APPLY] interaction.channel.id="${interaction.channel.id}" | channelId="${channelId}" | match=${interaction.channel.id === channelId}`);
       if (interaction.channel.id !== channelId) {
+        const ch = interaction.guild.channels.cache.get(channelId);
+        const chName = ch ? `#${ch.name}` : `channel ID ${channelId}`;
         return interaction.reply({
-          content: `You can only use \`/apply\` in <#${channelId}>.`,
+          content: `You can only use \`/apply\` in ${chName}.`,
           ephemeral: true,
         });
       }
