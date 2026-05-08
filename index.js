@@ -51,18 +51,17 @@ if (fs.existsSync(cooldownFile)) {
   cooldowns = JSON.parse(fs.readFileSync(cooldownFile));
 }
 
+// applicantId, all answer fields, submitted: bool
 const applicationData = {};
 
 const commands = [
   new SlashCommandBuilder().setName('apply').setDescription('Start the guild application process'),
   new SlashCommandBuilder()
     .setName('accept')
-    .setDescription('Accept a guild applicant')
-    .addUserOption(option => option.setName('user').setDescription('The user to accept').setRequired(true)),
+    .setDescription('Accept the applicant in this thread'),
   new SlashCommandBuilder()
     .setName('deny')
-    .setDescription('Deny a guild applicant')
-    .addUserOption(option => option.setName('user').setDescription('The user to deny').setRequired(true)),
+    .setDescription('Deny the applicant in this thread'),
   new SlashCommandBuilder()
     .setName('clearcooldown')
     .setDescription("Clear a user's application cooldown")
@@ -116,12 +115,12 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-function buildApplicationMessage(data = {}) {
+function buildApplicationMessage(data = {}, submitted = false) {
   const val = (key, placeholder) => data[key] ? `\`${data[key]}\`` : `*${placeholder}*`;
 
   const embed = new EmbedBuilder()
     .setTitle('Ships Guild Application')
-    .setColor(0x2ecc71)
+    .setColor(submitted ? 0x95a5a6 : 0x2ecc71)
     .setDescription(
       [
         '---',
@@ -164,10 +163,15 @@ function buildApplicationMessage(data = {}) {
         '',
         '---',
         '',
-        '**Best of luck with your application!**',
-        'We will review your stats and application, and get back to you soon.',
+        submitted
+          ? '✅ **Application submitted! Staff will review it shortly.**'
+          : '**Best of luck with your application!**\nWe will review your stats and application, and get back to you soon.',
       ].join('\n')
     );
+
+  if (submitted) {
+    return { embeds: [embed], components: [] };
+  }
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('modal_identity').setLabel('📝 In-Game Name').setStyle(ButtonStyle.Primary),
@@ -180,7 +184,11 @@ function buildApplicationMessage(data = {}) {
     new ButtonBuilder().setCustomId('modal_cheater').setLabel('⚔️ Cheater Experience').setStyle(ButtonStyle.Primary),
   );
 
-  return { embeds: [embed], components: [row1, row2] };
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('submit_application').setLabel('✅ Submit Application').setStyle(ButtonStyle.Success),
+  );
+
+  return { embeds: [embed], components: [row1, row2, row3] };
 }
 
 function buildStaffEmbed(data, threadId, applicantId) {
@@ -263,11 +271,11 @@ client.on('interactionCreate', async (interaction) => {
         autoArchiveDuration: 1440,
       });
 
-      applicationData[thread.id] = { applicantId: userId };
+      applicationData[thread.id] = { applicantId: userId, submitted: false };
 
       await thread.send({
-        content: `<@${userId}> Welcome! Fill out each section below using the buttons. Click a button to open the form for that section.`,
-        ...buildApplicationMessage(),
+        content: `<@${userId}> Welcome! Fill out each section using the buttons, then click **Submit Application** when you're done.`,
+        ...buildApplicationMessage({}, false),
       });
 
       await interaction.reply({ content: `Your application thread has been created! Check <#${thread.id}>.`, ephemeral: true });
@@ -279,35 +287,35 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const thread = interaction.channel;
-      const isApplicationThread = thread.isThread() && applicationData[thread.id];
+      const data = thread.isThread() ? applicationData[thread.id] : null;
 
-      if (!isApplicationThread) {
+      if (!data) {
         return interaction.reply({ content: 'This command can only be used inside an application thread.', ephemeral: true });
       }
 
-      const user = interaction.options.getUser('user');
-      const data = applicationData[thread.id];
-
-      if (user.id !== data.applicantId) {
-        return interaction.reply({ content: 'That user is not the applicant for this thread.', ephemeral: true });
+      if (!data.submitted) {
+        return interaction.reply({ content: 'This application has not been submitted yet.', ephemeral: true });
       }
+
+      const applicantId = data.applicantId;
+      const user = await client.users.fetch(applicantId);
 
       if (commandName === 'accept') {
         const msg = `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`;
         await retryDM(user, msg, thread);
-        await thread.send(`✅ <@${user.id}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
+        await thread.send(`✅ <@${applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
 
         try {
           const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, user.id)] });
+          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, applicantId)] });
         } catch (_) {}
 
       } else {
-        await thread.send(`❌ <@${user.id}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
+        await thread.send(`❌ <@${applicantId}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
 
         try {
           const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, user.id)] });
+          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, applicantId)] });
         } catch (_) {}
       }
 
@@ -344,6 +352,41 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     const threadId = interaction.channel.id;
     const data = applicationData[threadId];
+
+    if (interaction.customId === 'submit_application') {
+      if (!data || interaction.user.id !== data.applicantId) {
+        return interaction.reply({ content: 'Only the applicant can submit this application.', ephemeral: true });
+      }
+      if (data.submitted) {
+        return interaction.reply({ content: 'You have already submitted your application.', ephemeral: true });
+      }
+
+      data.submitted = true;
+
+      const messages = await interaction.channel.messages.fetch({ limit: 10 });
+      const botMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
+      if (botMsg) {
+        await botMsg.edit(buildApplicationMessage(data, true));
+      }
+
+      try {
+        const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
+        if (staffChannel) {
+          await staffChannel.send({
+            content: `📥 **New application submitted!**`,
+            embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
+          });
+        }
+      } catch (err) {
+        console.error('[STAFF CHANNEL] Failed to post submission:', err);
+      }
+
+      return interaction.reply({ content: '✅ Your application has been submitted! Staff will review it soon.', ephemeral: true });
+    }
+
+    if (data && data.submitted) {
+      return interaction.reply({ content: 'Your application has already been submitted and can no longer be edited.', ephemeral: true });
+    }
 
     if (data && interaction.user.id !== data.applicantId) {
       return interaction.reply({ content: 'Only the applicant can fill out this form.', ephemeral: true });
@@ -391,6 +434,10 @@ client.on('interactionCreate', async (interaction) => {
     if (!applicationData[threadId]) applicationData[threadId] = {};
     const data = applicationData[threadId];
 
+    if (data.submitted) {
+      return interaction.reply({ content: 'Your application has already been submitted and can no longer be edited.', ephemeral: true });
+    }
+
     const fieldIds = ['inGameName', 'stars', 'fkdr', 'favMaps', 'gameModes', 'experience',
                       'whyJoin', 'goodFit', 'guildExp', 'extra', 'cheaterExp'];
 
@@ -403,34 +450,11 @@ client.on('interactionCreate', async (interaction) => {
 
     const messages = await interaction.channel.messages.fetch({ limit: 10 });
     const botMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
-
     if (botMsg) {
-      await botMsg.edit(buildApplicationMessage(data));
+      await botMsg.edit(buildApplicationMessage(data, false));
     }
 
-    // Post summary to staff channel once application has at least an IGN
-    if (data.inGameName) {
-      try {
-        const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-        if (staffChannel) {
-          const staffMessages = await staffChannel.messages.fetch({ limit: 50 });
-          const existing = staffMessages.find(m =>
-            m.author.id === client.user.id &&
-            m.embeds[0]?.fields?.some(f => f.name === '🔗 Application Thread' && f.value === `<#${threadId}>`)
-          );
-          const payload = { embeds: [buildStaffEmbed(data, threadId, data.applicantId)] };
-          if (existing) {
-            await existing.edit(payload);
-          } else {
-            await staffChannel.send(payload);
-          }
-        }
-      } catch (err) {
-        console.error('[STAFF CHANNEL] Failed to post/update summary:', err);
-      }
-    }
-
-    await interaction.reply({ content: '✅ Section saved! The application has been updated.', ephemeral: true });
+    await interaction.reply({ content: '✅ Section saved! Click **Submit Application** when you\'re fully done.', ephemeral: true });
   }
 });
 
