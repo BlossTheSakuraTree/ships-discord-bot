@@ -409,7 +409,8 @@ ${invite.url}`);
       const message = interaction.options.getString('message');
 
       try {
-        await targetChannel.send(message);
+        await targetChannel.send(message.replace(/\n/g, '
+'));
         return interaction.reply({ content: `✅ Message sent in <#${targetChannel.id}>!`, ephemeral: true });
       } catch (err) {
         console.error('[BOTMESSAGE]', err.message);
