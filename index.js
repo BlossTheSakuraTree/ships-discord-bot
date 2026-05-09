@@ -253,6 +253,14 @@ client.on('interactionCreate', async (interaction) => {
       try {
         await interaction.deferReply({ ephemeral: true });
 
+        // Re-fetch the channel each time to avoid stale cache after thread deletions
+        try {
+          applyChannel = await client.channels.fetch(channelId);
+        } catch {
+          inProgress.delete(userId);
+          return interaction.editReply({ content: 'Application channel not found. Please contact an admin.' });
+        }
+
         if (!applyChannel) {
           inProgress.delete(userId);
           return interaction.editReply({ content: 'Application channel not found. Please contact an admin.' });
