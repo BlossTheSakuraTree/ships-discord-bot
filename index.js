@@ -20,13 +20,13 @@ const clientId = (process.env.CLIENT_ID || '').trim();
 const guildId = (process.env.GUILD_ID || '').trim();
 const channelId = (process.env.CHANNEL_ID || '').trim();
 const staffChannelId = (process.env.STAFF_CHANNEL_ID || '').trim();
-const inviteLink = (process.env.INVITE_LINK || '').trim();
+const inviteChannelId = (process.env.INVITE_CHANNEL_ID || '').trim();
 const applicationCooldownDays = parseInt(process.env.COOLDOWN_DAYS) || 7;
 const cooldownFile = (process.env.COOLDOWN_FILE || 'cooldowns.json').trim();
 const allowedRoles = (process.env.ALLOWED_ROLES || '').split(',').map(r => r.trim()).filter(Boolean);
 const adminRoles = (process.env.ADMIN_ROLES || '').split(',').map(r => r.trim()).filter(Boolean);
 
-const missingVars = ['TOKEN','CLIENT_ID','GUILD_ID','CHANNEL_ID','STAFF_CHANNEL_ID','INVITE_LINK','ALLOWED_ROLES','ADMIN_ROLES']
+const missingVars = ['TOKEN','CLIENT_ID','GUILD_ID','CHANNEL_ID','STAFF_CHANNEL_ID','INVITE_CHANNEL_ID','ALLOWED_ROLES','ADMIN_ROLES']
   .filter(k => !process.env[k] || !process.env[k].trim());
 if (missingVars.length > 0) {
   console.error(`[STARTUP ERROR] Missing env vars: ${missingVars.join(', ')}`);
@@ -311,7 +311,22 @@ client.on('interactionCreate', async (interaction) => {
       const user = await client.users.fetch(data.applicantId).catch(() => null);
 
       if (commandName === 'accept') {
-        if (user) await retryDM(user, `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`, thread);
+        // Generate a one-time invite that expires after 1 use and 24 hours
+        let invite = null;
+        try {
+          const inviteChannel = await interaction.guild.channels.fetch(inviteChannelId);
+          invite = await inviteChannel.createInvite({
+            maxUses: 1,
+            maxAge: 0, // 0 = never expires
+            unique: true,
+            reason: `Guild acceptance for ${user?.tag}`,
+          });
+        } catch (err) {
+          console.error('[INVITE] Failed to create invite:', err.message);
+        }
+
+        const inviteUrl = invite ? invite.url : '*(invite generation failed — contact an admin)*';
+        if (user) await retryDM(user, `Congratulations! You've been accepted into the Ships guild! Here's your one-time invite link (valid for 24 hours, 1 use only):\n${inviteUrl}`, thread);
         await thread.send(`✅ <@${data.applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
         try {
           try {
