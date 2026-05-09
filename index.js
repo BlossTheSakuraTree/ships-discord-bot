@@ -87,9 +87,26 @@ async function registerCommands() {
   }
 }
 
-client.once('ready', () => {
+let applyChannel = null;
+let staffChannel = null;
+
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   registerCommands();
+
+  try {
+    applyChannel = await client.channels.fetch(channelId);
+    console.log(`[STARTUP] Apply channel resolved: #${applyChannel.name}`);
+  } catch (err) {
+    console.error(`[STARTUP] Could not fetch apply channel (${channelId}):`, err.message);
+  }
+
+  try {
+    staffChannel = await client.channels.fetch(staffChannelId);
+    console.log(`[STARTUP] Staff channel resolved: #${staffChannel.name}`);
+  } catch (err) {
+    console.error(`[STARTUP] Could not fetch staff channel (${staffChannelId}):`, err.message);
+  }
 });
 
 async function retryDM(user, message, thread, alreadyWarned = false) {
@@ -236,7 +253,6 @@ client.on('interactionCreate', async (interaction) => {
       try {
         await interaction.deferReply({ ephemeral: true });
 
-        const applyChannel = await interaction.guild.channels.fetch(channelId);
         if (!applyChannel) {
           inProgress.delete(userId);
           return interaction.editReply({ content: 'Application channel not found. Please contact an admin.' });
@@ -290,14 +306,12 @@ client.on('interactionCreate', async (interaction) => {
         if (user) await retryDM(user, `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`, thread);
         await thread.send(`✅ <@${data.applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
         try {
-          const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
         } catch {}
       } else {
         await thread.send(`❌ <@${data.applicantId}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
         try {
-          const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-          await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
         } catch {}
       }
 
@@ -352,8 +366,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       try {
-        const staffChannel = await interaction.guild.channels.fetch(staffChannelId);
-        await staffChannel.send({
+        if (staffChannel) await staffChannel.send({
           content: `📥 **New application submitted!**`,
           embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
         });
