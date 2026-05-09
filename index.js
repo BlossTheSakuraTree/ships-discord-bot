@@ -79,6 +79,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('regeninvite')
     .setDescription('Regenerate a one-time invite link for the applicant in this thread'),
+  new SlashCommandBuilder()
+    .setName('botmessage')
+    .setDescription('Send a message as the bot in a selected channel (admin only)')
+    .addChannelOption(option => option.setName('channel').setDescription('Channel to send the message in').setRequired(true))
+    .addStringOption(option => option.setName('message').setDescription('Message to send').setRequired(true)),
 ].map(command => command.toJSON());
 
 async function registerCommands() {
@@ -392,6 +397,23 @@ ${invite.url}`);
         await interaction.reply({ content: `✅ New invite link sent to <@${user.id}> via DM!`, ephemeral: true });
       } catch {
         await interaction.reply({ content: `✅ Generated invite but couldn't DM <@${user.id}> (DMs closed). Link: ${invite.url}`, ephemeral: true });
+      }
+    }
+
+    if (commandName === 'botmessage') {
+      if (!adminRoles.some(role => interaction.member.roles.cache.has(role))) {
+        return interaction.reply({ content: 'You do not have permission to use this command!', ephemeral: true });
+      }
+
+      const targetChannel = interaction.options.getChannel('channel');
+      const message = interaction.options.getString('message');
+
+      try {
+        await targetChannel.send(message);
+        await interaction.reply({ content: `✅ Message sent in <#${targetChannel.id}>!`, ephemeral: true });
+      } catch (err) {
+        console.error('[BOTMESSAGE]', err.message);
+        await interaction.reply({ content: `❌ Failed to send message. Make sure the bot has access to <#${targetChannel.id}>.`, ephemeral: true });
       }
     }
 
