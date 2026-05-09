@@ -314,12 +314,18 @@ client.on('interactionCreate', async (interaction) => {
         if (user) await retryDM(user, `Congratulations! You've been accepted into the Ships guild! Here's your invite: ${inviteLink}`, thread);
         await thread.send(`✅ <@${data.applicantId}> has been **accepted** into the guild by <@${interaction.user.id}>!`);
         try {
-          if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          try {
+            staffChannel = await client.channels.fetch(staffChannelId);
+            if (staffChannel) await staffChannel.send({ content: `✅ **Accepted** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          } catch (err) { console.error('[STAFF CHANNEL] accept error:', err.message); }
         } catch {}
       } else {
         await thread.send(`❌ <@${data.applicantId}> has been **denied** by <@${interaction.user.id}>. You may re-apply after the cooldown period.`);
         try {
-          if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          try {
+            staffChannel = await client.channels.fetch(staffChannelId);
+            if (staffChannel) await staffChannel.send({ content: `❌ **Denied** by <@${interaction.user.id}>`, embeds: [buildStaffEmbed(data, thread.id, data.applicantId)] });
+          } catch (err) { console.error('[STAFF CHANNEL] deny error:', err.message); }
         } catch {}
       }
 
@@ -374,10 +380,15 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       try {
-        if (staffChannel) await staffChannel.send({
-          content: `📥 **New application submitted!**`,
-          embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
-        });
+        try {
+          staffChannel = await client.channels.fetch(staffChannelId);
+          if (staffChannel) await staffChannel.send({
+            content: `📥 **New application submitted!**`,
+            embeds: [buildStaffEmbed(data, threadId, data.applicantId)],
+          });
+        } catch (err) {
+          console.error('[STAFF CHANNEL] Failed to post submission:', err.message);
+        }
       } catch (err) {
         console.error('[STAFF CHANNEL] Failed to post submission:', err);
       }
