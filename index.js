@@ -82,8 +82,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('botmessage')
     .setDescription('Send a message as the bot in a selected channel (admin only)')
-    .addChannelOption(option => option.setName('channel').setDescription('Channel to send the message in').setRequired(true))
-    .addStringOption(option => option.setName('message').setDescription('Message to send').setRequired(true)),
+    .addChannelOption(option => option.setName('channel').setDescription('Channel to send the message in').setRequired(true)),
 ].map(command => command.toJSON());
 
 async function registerCommands() {
@@ -406,15 +405,23 @@ ${invite.url}`);
       }
 
       const targetChannel = interaction.options.getChannel('channel');
-      const message = interaction.options.getString('message');
 
-      try {
-        await targetChannel.send(message);
-        await interaction.reply({ content: `✅ Message sent in <#${targetChannel.id}>!`, ephemeral: true });
-      } catch (err) {
-        console.error('[BOTMESSAGE]', err.message);
-        await interaction.reply({ content: `❌ Failed to send message. Make sure the bot has access to <#${targetChannel.id}>.`, ephemeral: true });
-      }
+      const modal = new ModalBuilder()
+        .setCustomId(`botmessage_${targetChannel.id}`)
+        .setTitle(`Send message in #${targetChannel.name}`);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('botmessage_content')
+            .setLabel('Message')
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder('You can use mentions like @everyone, #channel, etc.')
+            .setRequired(true)
+        )
+      );
+
+      return interaction.showModal(modal);
     }
 
     if (commandName === 'clearcooldown') {
@@ -521,6 +528,19 @@ ${invite.url}`);
   }
 
   if (interaction.isModalSubmit()) {
+    if (interaction.customId.startsWith('botmessage_')) {
+      const targetChannelId = interaction.customId.replace('botmessage_', '');
+      const message = interaction.fields.getTextInputValue('botmessage_content');
+      try {
+        const targetChannel = await client.channels.fetch(targetChannelId);
+        await targetChannel.send(message);
+        return interaction.reply({ content: `✅ Message sent in <#${targetChannelId}>!`, ephemeral: true });
+      } catch (err) {
+        console.error('[BOTMESSAGE]', err.message);
+        return interaction.reply({ content: `❌ Failed to send message. Make sure the bot has access to that channel.`, ephemeral: true });
+      }
+    }
+
     const threadId = interaction.channel.id;
     const data = applicationData[threadId];
 
