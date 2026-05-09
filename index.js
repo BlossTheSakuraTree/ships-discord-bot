@@ -76,6 +76,9 @@ const commands = [
     .setName('setallowedroles')
     .setDescription('Set roles that can accept or deny applications (admin only)')
     .addRoleOption(option => option.setName('role').setDescription('Role to add').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('regeninvite')
+    .setDescription('Regenerate a one-time invite link for the applicant in this thread'),
 ].map(command => command.toJSON());
 
 async function registerCommands() {
@@ -347,6 +350,47 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       await interaction.reply({ content: 'Done!', ephemeral: true });
+    }
+
+    if (commandName === 'regeninvite') {
+      if (!allowedRoles.some(role => interaction.member.roles.cache.has(role))) {
+        return interaction.reply({ content: 'You do not have permission to use this command!', ephemeral: true });
+      }
+
+      const thread = interaction.channel;
+      const data = thread.isThread() ? applicationData[thread.id] : null;
+
+      if (!data) {
+        return interaction.reply({ content: 'This command can only be used inside an application thread.', ephemeral: true });
+      }
+
+      const user = await client.users.fetch(data.applicantId).catch(() => null);
+      if (!user) {
+        return interaction.reply({ content: 'Could not find the applicant.', ephemeral: true });
+      }
+      let invite = null;
+      try {
+        const privateGuild = await client.guilds.fetch(privateGuildId);
+        const inviteChannel = await privateGuild.channels.fetch(inviteChannelId);
+        invite = await inviteChannel.createInvite({
+          maxUses: 1,
+          maxAge: 0,
+          unique: true,
+          reason: `Invite regenerated for ${user.tag} by ${interaction.user.tag} in thread`,
+        });
+      } catch (err) {
+        console.error('[REGENINVITE] Failed to create invite:', err.message);
+        return interaction.reply({ content: 'Failed to generate invite link. Please check bot permissions.', ephemeral: true });
+      }
+
+      try {
+        const dmChannel = await user.createDM();
+        await dmChannel.send(`Your invite link to the Ships guild has been regenerated! Here's your new one-time invite link (1 use only):
+${invite.url}`);
+        await interaction.reply({ content: `✅ New invite link sent to <@${user.id}> via DM!`, ephemeral: true });
+      } catch {
+        await interaction.reply({ content: `✅ Generated invite but couldn't DM <@${user.id}> (DMs closed). Link: ${invite.url}`, ephemeral: true });
+      }
     }
 
     if (commandName === 'clearcooldown') {
