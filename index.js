@@ -281,6 +281,26 @@ client.on('interactionCreate', async (interaction) => {
         cooldowns[userId] = now;
         fs.writeFileSync(cooldownFile, JSON.stringify(cooldowns));
 
+        // Add all allowed role members to the thread
+        try {
+          const guild = interaction.guild;
+          const fetchedMembers = await guild.members.fetch();
+          const staffMembers = fetchedMembers.filter(m =>
+            allowedRoles.some(roleId => m.roles.cache.has(roleId)) && !m.user.bot
+          );
+          console.log(`[THREAD] Found ${staffMembers.size} staff members to add to thread`);
+          for (const [, member] of staffMembers) {
+            try {
+              await thread.members.add(member.id);
+              console.log(`[THREAD] Added ${member.user.tag} to thread`);
+            } catch (e) {
+              console.error(`[THREAD] Failed to add ${member.user.tag}:`, e.message);
+            }
+          }
+        } catch (err) {
+          console.error('[THREAD] Failed to add staff members:', err.message);
+        }
+
         await thread.send({
           content: `<@${userId}> Welcome! Fill out each section using the buttons below, then click **✅ Submit Application** when you're ready.`,
           embeds: [buildApplicationEmbed({}, false)],
@@ -303,6 +323,8 @@ client.on('interactionCreate', async (interaction) => {
 
       const thread = interaction.channel;
       const data = thread.isThread() ? applicationData[thread.id] : null;
+      // Ensure the staff member is in the thread
+      try { await thread.members.add(interaction.user.id); } catch {}
 
       if (!data) {
         return interaction.reply({ content: 'This command can only be used inside an application thread.', ephemeral: true });
